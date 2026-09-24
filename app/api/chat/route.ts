@@ -1,85 +1,110 @@
 import { NextResponse } from "next/server";
-import { GoogleGenerativeAI } from "@google/generative-ai";
+import Groq from "groq-sdk";
 
-const apiKey = process.env.GOOGLE_GENERATIVE_AI_API_KEY || "";
-const genAI = new GoogleGenerativeAI(apiKey);
-
-const model = genAI.getGenerativeModel({
-  model: "gemini-3.6-flash",
-  generationConfig: {
-    responseMimeType: "application/json",
-  },
-  systemInstruction: `You are 'Sarah', a high-converting, empathetic, and professional AI Business Growth Advisor for a premium Growth Marketing Agency on WhatsApp.
-Your goal:
-1. Converse naturally in 1-2 punchy, conversational sentences like a real human on WhatsApp. Never sound like a robotic script.
-2. Inquire about their business, current growth bottleneck, and monthly ad budget.
-3. If their monthly budget is $1,000+ or they show high intent:
-   - Mark status as 'QUALIFIED'
-   - Set qualificationScore between 75 and 90
-   - Offer these specific slots: "Tomorrow at 11:00 AM PKT" or "Tomorrow at 3:00 PM PKT" for a 15-min discovery call.
-4. If they agree to a slot (or give their email/confirmation):
-   - Mark status as 'BOOKED'
-   - Set qualificationScore to 100
-   - Set bookedSlot to the chosen time
-   - Confirm enthusiastically!
-5. If their budget is under $500:
-   - Mark status as 'UNQUALIFIED'
-   - Set qualificationScore to 25
-   - Politely point them to free agency audit resources.
-
-You MUST respond strictly in valid JSON matching this schema:
-{
-  "reply": "Sarah's WhatsApp message to the prospect",
-  "leadData": {
-    "leadName": "Prospect name if mentioned, otherwise null",
-    "businessType": "Business niche/type if mentioned, otherwise null",
-    "monthlyBudget": "Ad budget mentioned e.g. $2,500/mo, otherwise null",
-    "primaryGoal": "Core bottleneck or goal, otherwise null",
-    "qualificationScore": 85,
-    "status": "NEW" | "QUALIFYING" | "QUALIFIED" | "UNQUALIFIED" | "BOOKED",
-    "bookedSlot": "Slot string if booked, otherwise null"
-  }
-}`
+const groq = new Groq({
+  apiKey: process.env.GROQ_API_KEY || "",
 });
 
 export async function POST(req: Request) {
   try {
-    const { messages, currentLead } = await req.json();
+    const body = await req.json();
+    const { message, messages, conversationHistory } = body;
 
-    const conversationText = messages
-      .map((m: any) => `${m.sender === "user" ? "Prospect" : "Sarah"}: ${m.text}`)
-      .join("\n");
+    const systemPrompt = `You are a high-performing WhatsApp AI Sales Assistant and Lead Qualifier for a premier B2B Marketing Agency.
+Guidelines:
+1. Converse naturally like an authentic human sales development rep on WhatsApp (concise, conversational, professional yet warm).
+2. Keep replies short (maximum 2 to 3 sentences), exactly like a real person chatting on WhatsApp. Never write huge corporate paragraphs.
+3. Subtly qualify the lead on BANT (Budget, Need, Timeline, Authority).
+4. If the lead is qualified (ad spend / budget > $1,500/mo or urgent growth bottleneck), suggest booking a quick 15-minute strategy call.`;
 
-    const prompt = `Current CRM State:
-${JSON.stringify(currentLead, null, 2)}
+    let formattedMessages: any[] = [{ role: "system", content: systemPrompt }];
 
-Full WhatsApp Conversation So Far:
-${conversationText}
+    if (Array.isArray(messages) && messages.length > 0) {
+      formattedMessages = [
+        { role: "system", content: systemPrompt },
+        ...messages.map((m: any) => ({
+          role: m.role === "assistant" || m.role === "bot" ? "assistant" : "user",
+          content: m.content || m.text || "",
+        })),
+      ];
+    } else if (Array.isArray(conversationHistory) && conversationHistory.length > 0) {
+      formattedMessages = [
+        { role: "system", content: systemPrompt },
+        ...conversationHistory.map((m: any) => ({
+          role: m.sender === "bot" || m.role === "assistant" ? "assistant" : "user",
+          content: m.text || m.content || "",
+        })),
+        ...(message ? [{ role: "user", content: message }] : []),
+      ];
+    } else if (message) {
+      formattedMessages.push({ role: "user", content: message });
+    }
 
-Task: Read the prospect's latest message, update the CRM lead fields realistically, and write Sarah's next natural WhatsApp response.`;
+    // Dynamic model selection to bypass deprecations
+    const modelListRes = await groq.models.list();
+    const candidateIds = modelListRes.data
+      .map((m: any) => m.id)
+      .filter((id: string) => {
+        const lower = id.toLowerCase();
+        return (
+          !lower.includes("whisper") &&
+          !lower.includes("guard") &&
+          !lower.includes("vision") &&
+          !lower.includes("safeguard") &&
+          !lower.includes("canopy") &&
+          !lower.includes("orpheus") &&
+          !lower.includes("tts") &&
+          !lower.includes("audio")
+        );
+      });
 
-    const result = await model.generateContent(prompt);
-    const responseText = result.response.text();
-    const parsed = JSON.parse(responseText);
+    const priorityList = [
+      "llama-3.1-8b-instant",
+      "llama-3.3-70b-versatile",
+      "llama-3.2-3b-preview",
+      ...candidateIds,
+    ];
+
+    const availableToTry = Array.from(
+      new Set(priorityList.filter((p) => candidateIds.includes(p)))
+    );
+
+    let completion = null;
+    let lastError: any = null;
+
+    for (const model of availableToTry) {
+      try {
+        completion = await groq.chat.completions.create({
+          messages: formattedMessages,
+          model: model,
+          temperature: 0.6,
+          max_tokens: 500,
+        });
+
+        if (completion?.choices[0]?.message?.content) {
+          break;
+        }
+      } catch (err: any) {
+        lastError = err;
+        console.warn(`Groq model ${model} failed, trying next candidate...`);
+      }
+    }
+
+    const replyText = completion?.choices[0]?.message?.content || "";
+    if (!replyText) {
+      throw lastError || new Error("No response generated from Groq.");
+    }
 
     return NextResponse.json({
-      text: parsed.reply,
-      leadData: {
-        ...currentLead,
-        ...parsed.leadData,
-        leadName: parsed.leadData?.leadName || currentLead.leadName,
-        businessType: parsed.leadData?.businessType || currentLead.businessType,
-        monthlyBudget: parsed.leadData?.monthlyBudget || currentLead.monthlyBudget,
-        primaryGoal: parsed.leadData?.primaryGoal || currentLead.primaryGoal,
-        qualificationScore: parsed.leadData?.qualificationScore ?? currentLead.qualificationScore,
-        status: parsed.leadData?.status || currentLead.status,
-        bookedSlot: parsed.leadData?.bookedSlot || currentLead.bookedSlot,
-      }
+      reply: replyText,
+      message: replyText,
+      response: replyText,
+      content: replyText,
     });
   } catch (error: any) {
-    console.error("Agent error:", error);
+    console.error("WhatsApp AI Qualifier Error:", error);
     return NextResponse.json(
-      { error: error.message || "Failed to process message" },
+      { error: error.message || "Failed to process chat message" },
       { status: 500 }
     );
   }
