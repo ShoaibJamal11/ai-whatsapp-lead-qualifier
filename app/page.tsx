@@ -4,20 +4,22 @@ import React, { useState, useEffect, useRef } from "react";
 import { 
   Send, 
   Sparkles, 
-  RefreshCw,
-  Zap,
-  Building2,
-  DollarSign,
-  AlertCircle,
-  Calendar,
-  CheckCircle2,
-  Phone,
-  PhoneCall,
-  PhoneOff,
-  Mic,
-  MicOff,
-  Volume2,
-  Radio
+  RefreshCw, 
+  Zap, 
+  Building2, 
+  DollarSign, 
+  AlertCircle, 
+  Calendar, 
+  CheckCircle2, 
+  Phone, 
+  PhoneCall, 
+  PhoneOff, 
+  PhoneIncoming, 
+  Mic, 
+  MicOff, 
+  Volume2, 
+  Radio, 
+  Timer 
 } from "lucide-react";
 
 interface Message {
@@ -56,8 +58,9 @@ export default function WhatsAppVoiceQualifierPage() {
     meetingSlot: "Awaiting qualification",
   });
 
-  // Voice Call Modal States
+  // Voice Call States
   const [isCalling, setIsCalling] = useState(false);
+  const [isIncomingCall, setIsIncomingCall] = useState(false);
   const [callStatus, setCallStatus] = useState<"connecting" | "connected" | "ended">("connecting");
   const [callDuration, setCallDuration] = useState(0);
   const [isMuted, setIsMuted] = useState(false);
@@ -65,10 +68,16 @@ export default function WhatsAppVoiceQualifierPage() {
   const [voiceTranscript, setVoiceTranscript] = useState<string>("Connecting to Sarah via Groq Voice Bridge...");
   const [aiSpeaking, setAiSpeaking] = useState(false);
 
+  // Inactivity Trigger States
+  const [inactivityCountdown, setInactivityCountdown] = useState<number | null>(null);
+  const inactivityTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const countdownIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const audioContextRef = useRef<AudioContext | null>(null);
+  const ringtoneIntervalRef = useRef<NodeJS.Timeout | null>(null);
+
   const timerRef = useRef<NodeJS.Timeout | null>(null);
   const recognitionRef = useRef<any>(null);
 
-  // Call duration counter
   useEffect(() => {
     if (callStatus === "connected") {
       timerRef.current = setInterval(() => {
@@ -83,7 +92,101 @@ export default function WhatsAppVoiceQualifierPage() {
     };
   }, [callStatus]);
 
-  // Text-To-Speech helper for Sarah
+  // Clean ringtone sound generator (Web Audio API)
+  const playRingtone = () => {
+    try {
+      const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
+      if (!AudioCtx) return;
+      const ctx = new AudioCtx();
+      audioContextRef.current = ctx;
+
+      const ringPulse = () => {
+        if (!audioContextRef.current || audioContextRef.current.state === "closed") return;
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.type = "sine";
+        osc.frequency.setValueAtTime(440, ctx.currentTime);
+        osc.frequency.setValueAtTime(480, ctx.currentTime + 0.1);
+
+        gain.gain.setValueAtTime(0.15, ctx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 1.2);
+
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+        osc.start();
+        osc.stop(ctx.currentTime + 1.2);
+      };
+
+      ringPulse();
+      ringtoneIntervalRef.current = setInterval(ringPulse, 2500);
+    } catch (e) {
+      console.error("AudioContext error:", e);
+    }
+  };
+
+  const stopRingtone = () => {
+    if (ringtoneIntervalRef.current) clearInterval(ringtoneIntervalRef.current);
+    if (audioContextRef.current && audioContextRef.current.state !== "closed") {
+      audioContextRef.current.close().catch(() => {});
+      audioContextRef.current = null;
+    }
+  };
+
+  // Start 20s Inactivity Timer
+  const startInactivityWatchdog = () => {
+    clearInactivityTimers();
+    setInactivityCountdown(20);
+
+    countdownIntervalRef.current = setInterval(() => {
+      setInactivityCountdown((prev) => {
+        if (prev === null || prev <= 1) {
+          if (countdownIntervalRef.current) clearInterval(countdownIntervalRef.current);
+          return 0;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+
+    inactivityTimerRef.current = setTimeout(() => {
+      triggerAutonomousCall();
+    }, 20000);
+  };
+
+  const clearInactivityTimers = () => {
+    if (inactivityTimerRef.current) clearTimeout(inactivityTimerRef.current);
+    if (countdownIntervalRef.current) clearInterval(countdownIntervalRef.current);
+    setInactivityCountdown(null);
+  };
+
+  const triggerAutonomousCall = () => {
+    clearInactivityTimers();
+    if (isCalling) return;
+    setIsIncomingCall(true);
+    playRingtone();
+  };
+
+  const acceptIncomingCall = () => {
+    stopRingtone();
+    setIsIncomingCall(false);
+    setIsCalling(true);
+    setCallStatus("connected");
+
+    const opener = "Hi! This is Sarah from GrowthScale. I saw you paused on WhatsApp, so I hopped on a quick call to help you out. What is your current monthly ad spend?";
+    setVoiceTranscript(`Sarah: "${opener}"`);
+    speakSarahResponse(opener);
+
+    setCrm((prev) => ({
+      ...prev,
+      stage: "DROP_OFF_RECOVERED",
+      score: Math.max(prev.score, 65),
+    }));
+  };
+
+  const declineIncomingCall = () => {
+    stopRingtone();
+    setIsIncomingCall(false);
+  };
+
   const speakSarahResponse = (text: string) => {
     if (typeof window === "undefined" || !("speechSynthesis" in window)) return;
     window.speechSynthesis.cancel();
@@ -91,7 +194,6 @@ export default function WhatsAppVoiceQualifierPage() {
     utterance.rate = 1.05;
     utterance.pitch = 1.0;
     
-    // Choose female voice if available
     const voices = window.speechSynthesis.getVoices();
     const femaleVoice = voices.find(
       (v) =>
@@ -108,8 +210,8 @@ export default function WhatsAppVoiceQualifierPage() {
     window.speechSynthesis.speak(utterance);
   };
 
-  // Start Call Handler
   const startVoiceCall = () => {
+    clearInactivityTimers();
     setIsCalling(true);
     setCallStatus("connecting");
     setVoiceTranscript("Dialing GrowthScale Agency Voice Bridge...");
@@ -122,8 +224,8 @@ export default function WhatsAppVoiceQualifierPage() {
     }, 1500);
   };
 
-  // End Call Handler
   const endVoiceCall = () => {
+    stopRingtone();
     if (typeof window !== "undefined" && "speechSynthesis" in window) {
       window.speechSynthesis.cancel();
     }
@@ -135,14 +237,13 @@ export default function WhatsAppVoiceQualifierPage() {
     }, 700);
   };
 
-  // Speech Recognition (Voice Mic)
   const toggleSpeechRecognition = () => {
     if (typeof window === "undefined") return;
     const SpeechRecognition =
       (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
 
     if (!SpeechRecognition) {
-      alert("Speech Recognition is not supported by your browser. You can click on the quick voice buttons below!");
+      alert("Speech Recognition is not supported by your browser. Use the quick test buttons below!");
       return;
     }
 
@@ -168,8 +269,7 @@ export default function WhatsAppVoiceQualifierPage() {
         handleVoiceDialogue(spokenText);
       };
 
-      recognition.onerror = (err: any) => {
-        console.error("Speech recognition error:", err);
+      recognition.onerror = () => {
         setIsListening(false);
       };
 
@@ -179,13 +279,11 @@ export default function WhatsAppVoiceQualifierPage() {
 
       recognitionRef.current = recognition;
       recognition.start();
-    } catch (e: any) {
-      console.error(e);
+    } catch {
       setIsListening(false);
     }
   };
 
-  // Handle Spoken Dialogue through Groq API
   const handleVoiceDialogue = async (userVoiceText: string) => {
     setVoiceTranscript(`You: "${userVoiceText}"`);
     const newMessages: Message[] = [...messages, { role: "user", text: `[VOICE CALL] ${userVoiceText}` }];
@@ -228,10 +326,11 @@ export default function WhatsAppVoiceQualifierPage() {
     }
   };
 
-  // Standard Text Chat Handler
   const sendMessage = async (messageText?: string) => {
     const textToSend = messageText || input;
     if (!textToSend.trim() || loading) return;
+
+    clearInactivityTimers();
 
     const newMessages: Message[] = [...messages, { role: "user", text: textToSend }];
     setMessages(newMessages);
@@ -261,6 +360,9 @@ export default function WhatsAppVoiceQualifierPage() {
           "Thanks for sharing! Let me evaluate your requirements.";
 
         setMessages((prev) => [...prev, { role: "assistant", text: replyText }]);
+
+        // START 20S DROP-OFF WATCHDOG
+        startInactivityWatchdog();
 
         if (data.crm || data.qualificationScore) {
           setCrm({
@@ -301,7 +403,7 @@ export default function WhatsAppVoiceQualifierPage() {
             AI WhatsApp & Voice Call Qualification Setter
           </h1>
           <p className="text-slate-400 text-sm mt-1">
-            Omni-channel inbound triage via WhatsApp Cloud API & real-time Groq LPU Voice Calling Agent.
+            Omni-channel inbound triage with 20s autonomous drop-off voice recovery via Groq LPU.
           </p>
         </div>
 
@@ -319,6 +421,27 @@ export default function WhatsAppVoiceQualifierPage() {
           </div>
         </div>
       </div>
+
+      {/* Drop-off Recovery Status Bar */}
+      {inactivityCountdown !== null && (
+        <div className="max-w-7xl mx-auto mb-6 bg-slate-900/90 border border-amber-500/30 rounded-2xl p-3 px-5 flex items-center justify-between shadow-lg">
+          <div className="flex items-center gap-2.5 text-xs text-slate-300">
+            <Timer className="w-4 h-4 text-amber-400 animate-spin" />
+            <span>
+              <strong className="text-amber-400">Autonomous Drop-Off Watchdog Active:</strong> If prospect stays silent, AI will auto-dial in{" "}
+              <span className="font-mono font-bold text-white bg-slate-800 px-2 py-0.5 rounded border border-slate-700">
+                {inactivityCountdown}s
+              </span>
+            </span>
+          </div>
+          <button
+            onClick={triggerAutonomousCall}
+            className="px-3 py-1 bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-[11px] rounded-lg transition"
+          >
+            ⚡ Trigger Call Now
+          </button>
+        </div>
+      )}
 
       <div className="max-w-7xl mx-auto grid grid-cols-1 lg:grid-cols-12 gap-8">
         
@@ -439,7 +562,7 @@ export default function WhatsAppVoiceQualifierPage() {
                 <Zap className="w-4 h-4 text-emerald-400" /> Live CRM Pipeline Status
               </h2>
               <span className={`text-[10px] font-mono px-2.5 py-1 rounded-full font-bold border ${
-                crm.stage.includes("QUALIFIED")
+                crm.stage.includes("QUALIFIED") || crm.stage.includes("RECOVERED")
                   ? "bg-emerald-500/10 text-emerald-400 border-emerald-500/30"
                   : "bg-cyan-500/10 text-cyan-400 border-cyan-500/30"
               }`}>
@@ -504,7 +627,7 @@ export default function WhatsAppVoiceQualifierPage() {
                 <div className="w-1.5 h-1.5 rounded-full bg-emerald-400 mt-1.5"></div>
                 <div>
                   <strong className="text-slate-300">Autonomous WhatsApp & Inbound Calling Engine:</strong>
-                  <p className="text-[11px] text-slate-500">Triggers outbound AI phone call within 60s if WhatsApp lead goes cold.</p>
+                  <p className="text-[11px] text-slate-500">Triggers outbound AI phone call within 20s if WhatsApp lead goes cold.</p>
                 </div>
               </div>
 
@@ -535,12 +658,56 @@ export default function WhatsAppVoiceQualifierPage() {
 
       </div>
 
+      {/* POPUP: INCOMING CALL FROM SARAH (DROP-OFF RECOVERY) */}
+      {isIncomingCall && (
+        <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="w-full max-w-sm bg-gradient-to-b from-slate-900 to-slate-950 border-2 border-emerald-500/50 rounded-3xl p-6 shadow-2xl flex flex-col items-center text-center space-y-5">
+            <div className="inline-flex items-center gap-1.5 text-[10px] font-mono text-emerald-400 bg-emerald-500/10 px-3 py-1 rounded-full border border-emerald-500/20">
+              <Radio className="w-3 h-3 animate-ping" />
+              DROP-OFF RECOVERY DIALER
+            </div>
+
+            <div className="relative">
+              <div className="absolute inset-0 rounded-full bg-emerald-500/20 animate-ping"></div>
+              <div className="w-24 h-24 rounded-full bg-emerald-500 text-slate-950 font-bold text-3xl flex items-center justify-center border-4 border-slate-800 relative z-10">
+                S
+              </div>
+            </div>
+
+            <div>
+              <h3 className="text-lg font-bold text-slate-100">Sarah (AI Growth Advisor)</h3>
+              <p className="text-xs text-slate-400 mt-0.5">Incoming WhatsApp Audio Call...</p>
+              <p className="text-[11px] text-amber-400 mt-2 font-mono">
+                ⚠️ Prospect went silent on chat. Dialing to lock calendar slot!
+              </p>
+            </div>
+
+            <div className="flex items-center gap-6 pt-2">
+              <button
+                onClick={declineIncomingCall}
+                className="w-14 h-14 rounded-full bg-rose-600 hover:bg-rose-500 text-white flex items-center justify-center shadow-lg shadow-rose-600/30 transition transform active:scale-90"
+                title="Decline"
+              >
+                <PhoneOff className="w-6 h-6" />
+              </button>
+
+              <button
+                onClick={acceptIncomingCall}
+                className="w-16 h-16 rounded-full bg-emerald-500 hover:bg-emerald-400 text-slate-950 flex items-center justify-center shadow-xl shadow-emerald-500/40 animate-bounce transition transform active:scale-90"
+                title="Accept Call"
+              >
+                <PhoneIncoming className="w-7 h-7" />
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* FULLSCREEN REALISTIC WHATSAPP AUDIO CALL MODAL */}
       {isCalling && (
         <div className="fixed inset-0 z-50 bg-slate-950/95 backdrop-blur-md flex items-center justify-center p-4">
           <div className="w-full max-w-md bg-gradient-to-b from-slate-900 to-slate-950 border border-slate-800 rounded-3xl p-6 shadow-2xl flex flex-col items-center justify-between min-h-[580px] relative overflow-hidden">
             
-            {/* Top WhatsApp Call Header */}
             <div className="text-center space-y-1">
               <div className="inline-flex items-center gap-1.5 text-[11px] font-mono text-emerald-400 bg-emerald-500/10 px-3 py-1 rounded-full border border-emerald-500/20">
                 <Radio className="w-3 h-3 animate-pulse" />
@@ -552,7 +719,6 @@ export default function WhatsAppVoiceQualifierPage() {
               </p>
             </div>
 
-            {/* Pulsating Radar Avatar */}
             <div className="my-6 relative flex items-center justify-center">
               {aiSpeaking && (
                 <>
