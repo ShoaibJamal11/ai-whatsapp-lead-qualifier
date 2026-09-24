@@ -5,42 +5,46 @@ const groq = new Groq({
   apiKey: process.env.GROQ_API_KEY || "",
 });
 
+function cleanAndParseJSON(text: string) {
+  try {
+    return JSON.parse(text);
+  } catch {
+    const firstBrace = text.indexOf("{");
+    const lastBrace = text.lastIndexOf("}");
+    if (firstBrace !== -1 && lastBrace !== -1) {
+      return JSON.parse(text.substring(firstBrace, lastBrace + 1));
+    }
+    throw new Error("Could not parse JSON from AI response.");
+  }
+}
+
 export async function POST(req: Request) {
   try {
     const body = await req.json();
     const { message, messages, conversationHistory } = body;
 
-    const systemPrompt = `You are a high-performing WhatsApp AI Sales Assistant and Lead Qualifier for a premier B2B Marketing Agency.
-Guidelines:
-1. Converse naturally like an authentic human sales development rep on WhatsApp (concise, conversational, professional yet warm).
-2. Keep replies short (maximum 2 to 3 sentences), exactly like a real person chatting on WhatsApp. Never write huge corporate paragraphs.
-3. Subtly qualify the lead on BANT (Budget, Need, Timeline, Authority).
-4. If the lead is qualified (ad spend / budget > $1,500/mo or urgent growth bottleneck), suggest booking a quick 15-minute strategy call.`;
+    const latestUserMsg =
+      message ||
+      (Array.isArray(messages) && messages[messages.length - 1]?.content) ||
+      "Hi";
 
-    let formattedMessages: any[] = [{ role: "system", content: systemPrompt }];
+    const systemPrompt = `You are Sarah, an elite WhatsApp AI Growth Advisor & Lead Qualification Setter for GrowthScale Agency.
+Always respond strictly in valid JSON with this exact schema:
+{
+  "reply": "Your punchy conversational WhatsApp response (2-3 short, natural sentences, friendly tone, qualifying ad spend or proposing a quick call).",
+  "qualificationScore": 75,
+  "stage": "QUALIFIED",
+  "business": "E-Commerce Clothing Store",
+  "budget": "$3,000 - $5,000 / Mo",
+  "bottleneck": "Scale Ad Spend profitably",
+  "meetingSlot": "Booking Link Offered"
+}`;
 
-    if (Array.isArray(messages) && messages.length > 0) {
-      formattedMessages = [
-        { role: "system", content: systemPrompt },
-        ...messages.map((m: any) => ({
-          role: m.role === "assistant" || m.role === "bot" ? "assistant" : "user",
-          content: m.content || m.text || "",
-        })),
-      ];
-    } else if (Array.isArray(conversationHistory) && conversationHistory.length > 0) {
-      formattedMessages = [
-        { role: "system", content: systemPrompt },
-        ...conversationHistory.map((m: any) => ({
-          role: m.sender === "bot" || m.role === "assistant" ? "assistant" : "user",
-          content: m.text || m.content || "",
-        })),
-        ...(message ? [{ role: "user", content: message }] : []),
-      ];
-    } else if (message) {
-      formattedMessages.push({ role: "user", content: message });
-    }
+    const userPrompt = `Prospect WhatsApp Message: "${latestUserMsg}"
+Conversation Context: ${JSON.stringify(messages || conversationHistory || latestUserMsg)}
 
-    // Dynamic model selection to bypass deprecations
+Qualify this prospect and update the live CRM record. Return strictly raw JSON.`;
+
     const modelListRes = await groq.models.list();
     const candidateIds = modelListRes.data
       .map((m: any) => m.id)
@@ -75,10 +79,14 @@ Guidelines:
     for (const model of availableToTry) {
       try {
         completion = await groq.chat.completions.create({
-          messages: formattedMessages,
+          messages: [
+            { role: "system", content: systemPrompt },
+            { role: "user", content: userPrompt },
+          ],
           model: model,
-          temperature: 0.6,
-          max_tokens: 500,
+          temperature: 0.3,
+          max_tokens: 1024,
+          response_format: { type: "json_object" },
         });
 
         if (completion?.choices[0]?.message?.content) {
@@ -86,23 +94,36 @@ Guidelines:
         }
       } catch (err: any) {
         lastError = err;
-        console.warn(`Groq model ${model} failed, trying next candidate...`);
       }
     }
 
-    const replyText = completion?.choices[0]?.message?.content || "";
-    if (!replyText) {
-      throw lastError || new Error("No response generated from Groq.");
+    const responseContent = completion?.choices[0]?.message?.content || "";
+    if (!responseContent) {
+      throw lastError || new Error("No response from Groq models");
     }
 
+    const data = cleanAndParseJSON(responseContent);
+
     return NextResponse.json({
-      reply: replyText,
-      message: replyText,
-      response: replyText,
-      content: replyText,
+      reply: data.reply,
+      message: data.reply,
+      qualificationScore: data.qualificationScore || 70,
+      stage: data.stage || "DISCOVERY",
+      business: data.business || "Identified Prospect",
+      budget: data.budget || "Pending Inquiry",
+      bottleneck: data.bottleneck || "Scaling Acquisition",
+      meetingSlot: data.meetingSlot || "Awaiting Qualification",
+      crm: {
+        score: data.qualificationScore || 70,
+        stage: data.stage || "DISCOVERY",
+        business: data.business || "Identified Prospect",
+        budget: data.budget || "Pending Inquiry",
+        bottleneck: data.bottleneck || "Scaling Acquisition",
+        meetingSlot: data.meetingSlot || "Awaiting Qualification",
+      }
     });
   } catch (error: any) {
-    console.error("WhatsApp AI Qualifier Error:", error);
+    console.error("WhatsApp AI Route Error:", error);
     return NextResponse.json(
       { error: error.message || "Failed to process chat message" },
       { status: 500 }
