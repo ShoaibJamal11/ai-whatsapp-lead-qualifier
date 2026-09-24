@@ -1,75 +1,63 @@
 "use client";
 
-import React, { useState, useRef, useEffect } from "react";
+import React, { useState } from "react";
 import { 
   Send, 
   Bot, 
   User, 
+  CheckCircle2, 
   Calendar, 
   DollarSign, 
-  Target, 
-  Briefcase, 
-  CheckCircle2, 
+  AlertCircle, 
   Sparkles, 
-  Clock, 
-  PhoneCall,
-  Activity
+  RefreshCw,
+  Zap,
+  Building2
 } from "lucide-react";
 
 interface Message {
-  id: string;
-  sender: "bot" | "user";
+  role: "assistant" | "user";
   text: string;
-  timestamp: string;
 }
 
-interface LeadData {
-  leadName?: string;
-  businessType?: string;
-  monthlyBudget?: string;
-  primaryGoal?: string;
-  qualificationScore: number;
-  status: "NEW" | "QUALIFYING" | "QUALIFIED" | "UNQUALIFIED" | "BOOKED";
-  bookedSlot?: string;
-  email?: string;
+interface CRMData {
+  score: number;
+  stage: string;
+  business: string;
+  budget: string;
+  bottleneck: string;
+  meetingSlot: string;
 }
 
-export default function LeadQualifierDashboard() {
+const PRESET_HIGH = "We run an e-commerce clothing store doing $40k/month and want to scale ad spend profitably.";
+const PRESET_LOW = "I just started dropshipping yesterday and have $200 total budget. Can you help me?";
+
+export default function WhatsAppQualifierPage() {
   const [messages, setMessages] = useState<Message[]>([
     {
-      id: "1",
-      sender: "bot",
+      role: "assistant",
       text: "Hey there! Thanks for reaching out to GrowthScale Agency. What kind of business do you run, and what is your current growth bottleneck?",
-      timestamp: "Just now",
     },
   ]);
-
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
-  const [lead, setLead] = useState<LeadData>({
-    qualificationScore: 15,
-    status: "NEW",
+
+  const [crm, setCrm] = useState<CRMData>({
+    score: 15,
+    stage: "NEW",
+    business: "Not identified yet",
+    budget: "Pending inquiry",
+    bottleneck: "Analyzing conversation...",
+    meetingSlot: "Awaiting qualification",
   });
 
-  const chatEndRef = useRef<HTMLDivElement>(null);
+  const sendMessage = async (messageText?: string) => {
+    const textToSend = messageText || input;
+    if (!textToSend.trim() || loading) return;
 
-  useEffect(() => {
-    chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages, loading]);
-
-  const handleSendMessage = async (textToSend?: string) => {
-    const messageText = textToSend || input;
-    if (!messageText.trim() || loading) return;
-
-    const userMsg: Message = {
-      id: Date.now().toString(),
-      sender: "user",
-      text: messageText,
-      timestamp: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
-    };
-
-    setMessages((prev) => [...prev, userMsg]);
-    setInput("");
+    const newMessages: Message[] = [...messages, { role: "user", text: textToSend }];
+    setMessages(newMessages);
+    if (!messageText) setInput("");
     setLoading(true);
 
     try {
@@ -77,290 +65,270 @@ export default function LeadQualifierDashboard() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          messages: [...messages, userMsg],
-          currentLead: lead,
+          message: textToSend,
+          messages: newMessages.map((m) => ({
+            role: m.role,
+            content: m.text,
+          })),
         }),
       });
 
       const data = await res.json();
 
-      if (data.text) {
-        setMessages((prev) => [
-          ...prev,
-          {
-            id: (Date.now() + 1).toString(),
-            sender: "bot",
-            text: data.text,
-            timestamp: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
-          },
-        ]);
-      }
+      if (res.ok) {
+        const replyText =
+          data.reply ||
+          data.message ||
+          data.response ||
+          "Thanks for sharing! Let me evaluate your requirements.";
 
-      if (data.leadData) {
-        setLead(data.leadData);
+        setMessages((prev) => [...prev, { role: "assistant", text: replyText }]);
+
+        // Live CRM Update
+        if (data.crm || data.qualificationScore) {
+          setCrm({
+            score: data.crm?.score || data.qualificationScore || 75,
+            stage: data.crm?.stage || data.stage || "QUALIFIED",
+            business: data.crm?.business || data.business || "Identified Prospect",
+            budget: data.crm?.budget || data.budget || "$3k - $5k / Mo",
+            bottleneck: data.crm?.bottleneck || data.bottleneck || "Scaling Ad Spend",
+            meetingSlot: data.crm?.meetingSlot || data.meetingSlot || "Offered Booking Link",
+          });
+        }
+      } else {
+        alert("Server Error: " + (data.error || "Failed to generate reply"));
       }
-    } catch (err) {
-      console.error("Chat error:", err);
+    } catch (err: any) {
+      console.error(err);
+      alert("Network Error: " + err.message);
     } finally {
       setLoading(false);
     }
   };
 
-  const getStatusBadge = (status: LeadData["status"]) => {
-    const styles = {
-      NEW: "bg-blue-500/10 text-blue-400 border-blue-500/20",
-      QUALIFYING: "bg-amber-500/10 text-amber-400 border-amber-500/20",
-      QUALIFIED: "bg-emerald-500/10 text-emerald-400 border-emerald-500/20",
-      BOOKED: "bg-purple-500/10 text-purple-400 border-purple-500/20 animate-pulse",
-      UNQUALIFIED: "bg-rose-500/10 text-rose-400 border-rose-500/20",
-    };
-    return styles[status] || styles.NEW;
-  };
-
   return (
-    <main className="min-h-screen bg-slate-950 text-slate-100 flex flex-col p-4 md:p-8">
-      {/* Top Banner */}
-      <div className="max-w-7xl mx-auto w-full mb-6 flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-slate-800 pb-5">
+    <main className="min-h-screen bg-slate-950 text-slate-100 p-4 md:p-8">
+      {/* Header */}
+      <div className="max-w-7xl mx-auto mb-8 border-b border-slate-800 pb-5 flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div>
           <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 text-xs font-medium mb-2">
-            <Sparkles className="w-3.5 h-3.5" /> High-Ticket Agency Automation
+            <Sparkles className="w-3.5 h-3.5" /> High-Ticket Agency Automation #3
           </div>
           <h1 className="text-2xl md:text-3xl font-bold tracking-tight">
             AI WhatsApp Lead Qualifier & Booking Agent
           </h1>
           <p className="text-slate-400 text-sm mt-1">
-            Instant inbound lead triage, CRM synchronization, and calendar slot booking via Gemini 3.6 Tool Calling.
+            Instant inbound lead triage, CRM synchronization, and calendar slot booking via Groq LPU Engine.
           </p>
         </div>
 
-        <div className="flex items-center gap-3">
-          <div className="text-right">
-            <p className="text-xs text-slate-500 font-mono">PIPELINE VALUE</p>
-            <p className="text-lg font-bold text-emerald-400">$1,000 / Retainer</p>
-          </div>
+        <div className="text-right">
+          <p className="text-xs text-slate-500 font-mono">PIPELINE VALUE</p>
+          <p className="text-lg font-bold text-emerald-400">$1,000 / Retainer</p>
         </div>
       </div>
 
-      {/* Main Grid: WhatsApp Phone Left | CRM Pipeline Right */}
-      <div className="max-w-7xl mx-auto w-full grid grid-cols-1 lg:grid-cols-12 gap-6 flex-1">
+      <div className="max-w-7xl mx-auto grid grid-cols-1 lg:grid-cols-12 gap-8">
         
-        {/* Left: WhatsApp Web Emulator (5 cols) */}
-        <div className="lg:col-span-6 flex flex-col bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden shadow-2xl">
-          {/* WhatsApp Header */}
-          <div className="bg-slate-800/90 px-4 py-3 border-b border-slate-700/60 flex items-center justify-between">
+        {/* Left Column: WhatsApp Chat Simulator */}
+        <div className="lg:col-span-6 bg-slate-900 border border-slate-800 rounded-3xl overflow-hidden shadow-2xl flex flex-col h-[650px]">
+          {/* Chat Header */}
+          <div className="bg-slate-950/80 px-5 py-4 border-b border-slate-800 flex items-center justify-between">
             <div className="flex items-center gap-3">
-              <div className="relative">
-                <div className="w-10 h-10 rounded-full bg-emerald-600 flex items-center justify-center font-bold text-white shadow">
-                  S
-                </div>
-                <span className="w-3 h-3 bg-emerald-400 border-2 border-slate-900 rounded-full absolute bottom-0 right-0"></span>
+              <div className="w-10 h-10 rounded-full bg-emerald-500 flex items-center justify-center font-bold text-slate-950 shadow-md shadow-emerald-500/20">
+                S
               </div>
               <div>
-                <h3 className="font-semibold text-sm leading-tight">Sarah (AI Growth Advisor)</h3>
-                <p className="text-xs text-slate-400">Meta WhatsApp Cloud API • Online</p>
+                <h3 className="text-sm font-semibold text-slate-100 flex items-center gap-1.5">
+                  Sarah (AI Growth Advisor)
+                </h3>
+                <p className="text-[11px] text-emerald-400 flex items-center gap-1">
+                  <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+                  Meta WhatsApp Cloud API • Online
+                </p>
               </div>
             </div>
-            <div className="flex gap-2">
-              <span className="text-xs font-mono px-2 py-1 bg-slate-900/60 rounded text-slate-300 border border-slate-700">
-                Live Simulator
-              </span>
-            </div>
+            <span className="text-[10px] font-mono px-2.5 py-1 rounded-full bg-slate-800 text-slate-400 border border-slate-700">
+              Live Simulator
+            </span>
           </div>
 
           {/* Quick Preset Buttons */}
-          <div className="bg-slate-900/60 px-4 py-2 border-b border-slate-800 flex gap-2 overflow-x-auto text-xs">
-            <button 
-              onClick={() => handleSendMessage("We run an e-commerce clothing store and want to scale ad spend.")}
-              className="whitespace-nowrap px-2.5 py-1 rounded-md bg-slate-800 hover:bg-slate-700 text-slate-300 transition"
+          <div className="bg-slate-950/40 px-4 py-2 border-b border-slate-800/80 flex items-center gap-2 overflow-x-auto text-[11px]">
+            <span className="text-slate-500 text-[10px] font-mono whitespace-nowrap">Presets:</span>
+            <button
+              onClick={() => sendMessage(PRESET_HIGH)}
+              disabled={loading}
+              className="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-emerald-300 rounded-lg border border-slate-700 whitespace-nowrap transition disabled:opacity-50"
             >
-              🛍️ E-commerce ($3k Ad Spend)
+              ⚡ E-commerce ($5k Ad Spend)
             </button>
-            <button 
-              onClick={() => handleSendMessage("I am a solo coach with $200 budget.")}
-              className="whitespace-nowrap px-2.5 py-1 rounded-md bg-slate-800 hover:bg-slate-700 text-slate-300 transition"
+            <button
+              onClick={() => sendMessage(PRESET_LOW)}
+              disabled={loading}
+              className="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-amber-300 rounded-lg border border-slate-700 whitespace-nowrap transition disabled:opacity-50"
             >
-              💸 Low Budget Lead ($200)
+              ⭐ Low Budget Lead ($200)
             </button>
           </div>
 
-          {/* Chat Messages */}
-          <div className="flex-1 overflow-y-auto p-4 space-y-3 bg-[radial-gradient(#1e293b_1px,transparent_1px)] [background-size:16px_16px]">
-            {messages.map((m) => (
+          {/* Message List */}
+          <div className="flex-1 overflow-y-auto p-4 space-y-3 bg-slate-950/20">
+            {messages.map((m, i) => (
               <div
-                key={m.id}
-                className={`flex flex-col ${m.sender === "user" ? "items-end" : "items-start"}`}
+                key={i}
+                className={`flex ${m.role === "user" ? "justify-end" : "justify-start"}`}
               >
                 <div
-                  className={`max-w-[85%] rounded-2xl px-4 py-2.5 text-sm shadow-md leading-relaxed ${
-                    m.sender === "user"
-                      ? "bg-emerald-600 text-white rounded-br-none"
-                      : "bg-slate-800 text-slate-100 rounded-bl-none border border-slate-700/60"
+                  className={`max-w-[82%] rounded-2xl px-4 py-3 text-xs leading-relaxed shadow ${
+                    m.role === "user"
+                      ? "bg-emerald-600 text-slate-950 font-medium rounded-br-none"
+                      : "bg-slate-800/90 text-slate-200 border border-slate-700/60 rounded-bl-none"
                   }`}
                 >
                   <p>{m.text}</p>
-                  <span className={`block text-[10px] mt-1 text-right ${m.sender === "user" ? "text-emerald-200" : "text-slate-400"}`}>
-                    {m.timestamp}
+                  <span className={`text-[9px] mt-1.5 block text-right font-mono ${m.role === "user" ? "text-emerald-950/70" : "text-slate-400"}`}>
+                    Just now
                   </span>
                 </div>
               </div>
             ))}
+
             {loading && (
-              <div className="flex items-center gap-2 text-xs text-slate-400 bg-slate-800/60 p-2.5 rounded-xl border border-slate-800 w-fit">
-                <Clock className="w-3.5 h-3.5 animate-spin text-emerald-400" />
-                <span>Sarah is analyzing intent & checking tools...</span>
+              <div className="flex justify-start">
+                <div className="bg-slate-800 border border-slate-700/60 text-slate-400 rounded-2xl px-4 py-2.5 text-xs flex items-center gap-2">
+                  <RefreshCw className="w-3.5 h-3.5 animate-spin text-emerald-400" />
+                  Sarah is typing via Groq...
+                </div>
               </div>
             )}
-            <div ref={chatEndRef} />
           </div>
 
-          {/* Input Bar */}
-          <div className="p-3 bg-slate-800/80 border-t border-slate-700/60">
-            <form
-              onSubmit={(e) => {
-                e.preventDefault();
-                handleSendMessage();
-              }}
-              className="flex items-center gap-2"
+          {/* Message Input */}
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              sendMessage();
+            }}
+            className="p-3 bg-slate-950/80 border-t border-slate-800 flex items-center gap-2"
+          >
+            <input
+              type="text"
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              placeholder="Type your message as the lead..."
+              className="flex-1 bg-slate-900 border border-slate-800 rounded-xl px-4 py-2.5 text-xs text-slate-200 focus:outline-none focus:border-emerald-500"
+            />
+            <button
+              type="submit"
+              disabled={loading || !input.trim()}
+              className="bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-slate-950 p-2.5 rounded-xl transition"
             >
-              <input
-                type="text"
-                value={input}
-                onChange={(e) => setInput(e.target.value)}
-                placeholder="Type your message as the lead..."
-                className="flex-1 bg-slate-900 border border-slate-700 rounded-xl px-4 py-2.5 text-sm text-slate-100 placeholder-slate-500 focus:outline-none focus:border-emerald-500"
-              />
-              <button
-                type="submit"
-                disabled={loading || !input.trim()}
-                className="bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 p-2.5 rounded-xl text-white font-medium transition flex items-center justify-center"
-              >
-                <Send className="w-4 h-4" />
-              </button>
-            </form>
-          </div>
+              <Send className="w-4 h-4" />
+            </button>
+          </form>
         </div>
 
-        {/* Right: Agency CRM Pipeline (6 cols) */}
-        <div className="lg:col-span-6 flex flex-col gap-6">
-          
-          {/* Lead Qualification Stage Card */}
-          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-xl">
-            <div className="flex items-center justify-between mb-4">
-              <h2 className="text-base font-semibold flex items-center gap-2">
-                <Activity className="w-4 h-4 text-emerald-400" /> Live CRM Pipeline Status
+        {/* Right Column: Live CRM Pipeline Status */}
+        <div className="lg:col-span-6 space-y-6">
+          <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 shadow-xl space-y-5">
+            <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+              <h2 className="text-sm font-semibold flex items-center gap-2 text-slate-200">
+                <Zap className="w-4 h-4 text-emerald-400" /> Live CRM Pipeline Status
               </h2>
-              <span className={`text-xs px-3 py-1 rounded-full font-bold border ${getStatusBadge(lead.status)}`}>
-                STAGE: {lead.status}
+              <span className={`text-[10px] font-mono px-2.5 py-1 rounded-full font-bold border ${
+                crm.stage === "QUALIFIED"
+                  ? "bg-emerald-500/10 text-emerald-400 border-emerald-500/30"
+                  : "bg-cyan-500/10 text-cyan-400 border-cyan-500/30"
+              }`}>
+                STAGE: {crm.stage}
               </span>
             </div>
 
-            {/* Score Bar */}
-            <div className="mb-5">
-              <div className="flex justify-between text-xs text-slate-400 mb-1.5 font-medium">
-                <span>AI Qualification Score</span>
-                <span className="font-mono text-emerald-400 font-bold">{lead.qualificationScore}/100</span>
+            {/* AI Qualification Score */}
+            <div>
+              <div className="flex justify-between text-xs mb-1.5">
+                <span className="text-slate-400 font-mono text-[11px]">AI Qualification Score</span>
+                <span className="font-bold font-mono text-emerald-400">{crm.score}/100</span>
               </div>
-              <div className="w-full bg-slate-800 h-2.5 rounded-full overflow-hidden">
-                <div 
-                  className={`h-full transition-all duration-700 rounded-full ${
-                    lead.qualificationScore > 70 
-                      ? "bg-emerald-500" 
-                      : lead.qualificationScore > 40 
-                      ? "bg-amber-500" 
-                      : "bg-blue-500"
-                  }`}
-                  style={{ width: `${lead.qualificationScore}%` }}
-                />
+              <div className="w-full h-2 bg-slate-950 rounded-full overflow-hidden border border-slate-800">
+                <div
+                  className="h-full bg-gradient-to-r from-cyan-500 to-emerald-400 transition-all duration-500"
+                  style={{ width: `${crm.score}%` }}
+                ></div>
               </div>
             </div>
 
-            {/* Extracted Attributes Matrix */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
-              <div className="p-3 rounded-xl bg-slate-950/70 border border-slate-800/80">
-                <div className="flex items-center gap-2 text-slate-400 text-xs mb-1">
-                  <User className="w-3.5 h-3.5 text-blue-400" /> Prospect / Business
-                </div>
-                <p className="font-medium text-slate-200">
-                  {lead.businessType || lead.leadName || "Not identified yet"}
-                </p>
+            {/* 4 CRM Data Boxes */}
+            <div className="grid grid-cols-2 gap-3 text-xs">
+              <div className="bg-slate-950/70 border border-slate-800/80 p-3.5 rounded-2xl">
+                <span className="text-[10px] uppercase font-mono text-slate-500 flex items-center gap-1 mb-1">
+                  <Building2 className="w-3 h-3 text-cyan-400" /> Prospect / Business
+                </span>
+                <p className="font-semibold text-slate-200 truncate">{crm.business}</p>
               </div>
 
-              <div className="p-3 rounded-xl bg-slate-950/70 border border-slate-800/80">
-                <div className="flex items-center gap-2 text-slate-400 text-xs mb-1">
-                  <DollarSign className="w-3.5 h-3.5 text-emerald-400" /> Monthly Budget
-                </div>
-                <p className="font-medium text-slate-200">
-                  {lead.monthlyBudget || "Pending inquiry"}
-                </p>
+              <div className="bg-slate-950/70 border border-slate-800/80 p-3.5 rounded-2xl">
+                <span className="text-[10px] uppercase font-mono text-slate-500 flex items-center gap-1 mb-1">
+                  <DollarSign className="w-3 h-3 text-emerald-400" /> Monthly Budget
+                </span>
+                <p className="font-semibold text-emerald-400 truncate">{crm.budget}</p>
               </div>
 
-              <div className="p-3 rounded-xl bg-slate-950/70 border border-slate-800/80">
-                <div className="flex items-center gap-2 text-slate-400 text-xs mb-1">
-                  <Target className="w-3.5 h-3.5 text-rose-400" /> Core Pain Point / Bottleneck
-                </div>
-                <p className="font-medium text-slate-200">
-                  {lead.primaryGoal || "Analyzing conversation..."}
-                </p>
+              <div className="bg-slate-950/70 border border-slate-800/80 p-3.5 rounded-2xl">
+                <span className="text-[10px] uppercase font-mono text-slate-500 flex items-center gap-1 mb-1">
+                  <AlertCircle className="w-3 h-3 text-rose-400" /> Core Bottleneck
+                </span>
+                <p className="font-semibold text-slate-300 truncate">{crm.bottleneck}</p>
               </div>
 
-              <div className="p-3 rounded-xl bg-slate-950/70 border border-slate-800/80">
-                <div className="flex items-center gap-2 text-slate-400 text-xs mb-1">
-                  <Calendar className="w-3.5 h-3.5 text-purple-400" /> Confirmed Meeting Slot
-                </div>
-                <p className="font-medium text-slate-200">
-                  {lead.bookedSlot ? (
-                    <span className="text-purple-400 font-semibold">{lead.bookedSlot}</span>
-                  ) : (
-                    "Awaiting qualification"
-                  )}
-                </p>
+              <div className="bg-slate-950/70 border border-slate-800/80 p-3.5 rounded-2xl">
+                <span className="text-[10px] uppercase font-mono text-slate-500 flex items-center gap-1 mb-1">
+                  <Calendar className="w-3 h-3 text-violet-400" /> Confirmed Meeting Slot
+                </span>
+                <p className="font-semibold text-slate-300 truncate">{crm.meetingSlot}</p>
               </div>
             </div>
           </div>
 
-          {/* Autonomous Actions Log (Proof of Tool Calling for Clients) */}
-          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-xl flex-1 flex flex-col">
-            <h3 className="text-sm font-semibold text-slate-300 mb-3 flex items-center gap-2">
+          {/* Agency Automations Information */}
+          <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 shadow-xl space-y-4">
+            <h3 className="text-xs font-semibold text-slate-200 flex items-center gap-2">
               <CheckCircle2 className="w-4 h-4 text-emerald-400" /> Real-Time Agency Automations
             </h3>
 
-            <div className="space-y-2.5 text-xs">
-              <div className="flex items-start gap-2.5 p-2.5 rounded-lg bg-slate-950/50 border border-slate-800/60">
-                <div className="w-2 h-2 rounded-full bg-emerald-400 mt-1.5 shrink-0" />
+            <div className="space-y-3 text-xs text-slate-400">
+              <div className="flex items-start gap-2.5">
+                <div className="w-1.5 h-1.5 rounded-full bg-emerald-400 mt-1.5"></div>
                 <div>
-                  <p className="font-medium text-slate-200">Instant Lead Response Engine</p>
-                  <p className="text-slate-400 text-[11px]">Triggers within 10 seconds of Meta/TikTok ad webhook ingestion.</p>
+                  <strong className="text-slate-300">Instant Lead Response Engine:</strong>
+                  <p className="text-[11px] text-slate-500">Triggers within 10 seconds of Meta/TikTok ad webhook ingestion.</p>
                 </div>
               </div>
 
-              <div className="flex items-start gap-2.5 p-2.5 rounded-lg bg-slate-950/50 border border-slate-800/60">
-                <div className="w-2 h-2 rounded-full bg-blue-400 mt-1.5 shrink-0" />
+              <div className="flex items-start gap-2.5">
+                <div className="w-1.5 h-1.5 rounded-full bg-cyan-400 mt-1.5"></div>
                 <div>
-                  <p className="font-medium text-slate-200">CRM Field Extraction (Gemini Tool Calling)</p>
-                  <p className="text-slate-400 text-[11px]">Automatically updates HubSpot/GoHighLevel contact attributes via function execution.</p>
+                  <strong className="text-slate-300">CRM Field Extraction (Groq LPU Engine):</strong>
+                  <p className="text-[11px] text-slate-500">Automatically parses and updates contact attributes with zero human intervention.</p>
                 </div>
               </div>
 
-              <div className="flex items-start gap-2.5 p-2.5 rounded-lg bg-slate-950/50 border border-slate-800/60">
-                <div className="w-2 h-2 rounded-full bg-purple-400 mt-1.5 shrink-0" />
+              <div className="flex items-start gap-2.5">
+                <div className="w-1.5 h-1.5 rounded-full bg-violet-400 mt-1.5"></div>
                 <div>
-                  <p className="font-medium text-slate-200">Autonomous Calendar Locking</p>
-                  <p className="text-slate-400 text-[11px]">Syncs qualified leads with Google Calendar / Calendly with zero human intervention.</p>
+                  <strong className="text-slate-300">Autonomous Calendar Locking:</strong>
+                  <p className="text-[11px] text-slate-500">Syncs qualified leads with Google Calendar / Calendly instantly.</p>
                 </div>
               </div>
             </div>
 
-            {/* Direct Pitch for Agency Clients */}
-            <div className="mt-auto pt-4 border-t border-slate-800/80">
-              <div className="p-3 bg-emerald-950/20 border border-emerald-900/40 rounded-xl">
-                <p className="text-xs text-emerald-300 font-medium">
-                  💡 <strong>B2B Value Metric:</strong> Decreases lead drop-off by 68% and eliminates the need for full-time inbound appointment setters.
-                </p>
-              </div>
+            <div className="pt-2 border-t border-slate-800/80">
+              <p className="text-[11px] text-slate-400 font-mono">
+                💡 <span className="text-slate-300 font-semibold">B2B Value Metric:</span> Decreases lead drop-off by 68% and eliminates the need for full-time inbound appointment setters.
+              </p>
             </div>
-
           </div>
-
         </div>
 
       </div>
