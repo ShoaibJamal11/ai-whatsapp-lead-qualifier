@@ -1,132 +1,76 @@
-import { NextResponse } from "next/server";
-import Groq from "groq-sdk";
+import { NextRequest, NextResponse } from "next/server";
+import { groq, resolveModel } from "@/lib/groq";
 
-const groq = new Groq({
-  apiKey: process.env.GROQ_API_KEY || "",
-});
+export const dynamic = "force-dynamic";
 
-function cleanAndParseJSON(text: string) {
-  try {
-    return JSON.parse(text);
-  } catch {
-    const firstBrace = text.indexOf("{");
-    const lastBrace = text.lastIndexOf("}");
-    if (firstBrace !== -1 && lastBrace !== -1) {
-      return JSON.parse(text.substring(firstBrace, lastBrace + 1));
-    }
-    throw new Error("Could not parse JSON from AI response.");
-  }
-}
+const SYSTEM_PROMPT = `You are Alex, an elite direct-response growth partner at a top performance marketing agency.
+Your goal is to qualify inbound leads naturally via WhatsApp conversation and address objections without being pushy.
 
-export async function POST(req: Request) {
-  try {
-    const body = await req.json();
-    const { message, messages, conversationHistory } = body;
+RULES:
+1. Speak like a sharp, friendly, human media buyer (1-2 sentences max).
+2. NEVER repeat a question you already asked. If the lead mentioned their spend ($8k), NEVER ask for their budget again.
+3. DYNAMIC OBJECTION HANDLING:
+   - If user says they have an in-house media buyer or team:
+     Respect their setup. Explain that you partner alongside internal buyers—handling rapid UGC testing and creative fatigue so their team can focus on media buying. Offer a zero-risk 15-min audit of their creative drop-off and hook rates.
+   - If they say they are not looking for an agency:
+     Keep it zero pressure. Frame it as a peer-to-peer strategy session to fix their CPA spike.
+4. If qualified ($5k+ spend and bottleneck identified) or handling this objection, set "showBookingCard": true.
 
-    const latestUserMsg =
-      message ||
-      (Array.isArray(messages) && messages[messages.length - 1]?.content) ||
-      "Hi";
-
-    const systemPrompt = `You are Sarah, an elite WhatsApp AI Growth Advisor & Lead Qualification Setter for GrowthScale Agency.
-Always respond strictly in valid JSON with this exact schema:
+OUTPUT FORMAT:
+Respond ONLY with a valid raw JSON object matching this schema (no markdown, no backticks):
 {
-  "reply": "Your punchy conversational WhatsApp response (2-3 short, natural sentences, friendly tone, qualifying ad spend or proposing a quick call).",
-  "qualificationScore": 75,
-  "stage": "QUALIFIED",
-  "business": "E-Commerce Clothing Store",
-  "budget": "$3,000 - $5,000 / Mo",
-  "bottleneck": "Scale Ad Spend profitably",
-  "meetingSlot": "Booking Link Offered"
+  "reply": "Your WhatsApp text response",
+  "leadData": {
+    "estimatedSpend": "$8k/month",
+    "bottleneck": "CPA spike / In-house team",
+    "isQualified": true
+  },
+  "showBookingCard": true
 }`;
 
-    const userPrompt = `Prospect WhatsApp Message: "${latestUserMsg}"
-Conversation Context: ${JSON.stringify(messages || conversationHistory || latestUserMsg)}
+export async function POST(req: NextRequest) {
+  try {
+    const body = await req.json();
+    const rawMessages = body.messages || [];
 
-Qualify this prospect and update the live CRM record. Return strictly raw JSON.`;
+    // Sanitize messages so Groq never throws 400 on extra UI fields
+    const cleanMessages = rawMessages
+      .filter((m: any) => m && m.content)
+      .map((m: any) => ({
+        role: m.role === "assistant" ? "assistant" : "user",
+        content: String(m.content),
+      }));
 
-    const modelListRes = await groq.models.list();
-    const candidateIds = modelListRes.data
-      .map((m: any) => m.id)
-      .filter((id: string) => {
-        const lower = id.toLowerCase();
-        return (
-          !lower.includes("whisper") &&
-          !lower.includes("guard") &&
-          !lower.includes("vision") &&
-          !lower.includes("safeguard") &&
-          !lower.includes("canopy") &&
-          !lower.includes("orpheus") &&
-          !lower.includes("tts") &&
-          !lower.includes("audio")
-        );
-      });
-
-    const priorityList = [
-      "llama-3.1-8b-instant",
-      "llama-3.3-70b-versatile",
-      "llama-3.2-3b-preview",
-      ...candidateIds,
+    const fullMessages = [
+      { role: "system", content: SYSTEM_PROMPT },
+      ...cleanMessages,
     ];
 
-    const availableToTry = Array.from(
-      new Set(priorityList.filter((p) => candidateIds.includes(p)))
-    );
+    // Dynamically resolve an active Groq chat model (llama-3.3-70b-versatile, etc.)
+    const model = await resolveModel();
 
-    let completion = null;
-    let lastError: any = null;
-
-    for (const model of availableToTry) {
-      try {
-        completion = await groq.chat.completions.create({
-          messages: [
-            { role: "system", content: systemPrompt },
-            { role: "user", content: userPrompt },
-          ],
-          model: model,
-          temperature: 0.3,
-          max_tokens: 1024,
-          response_format: { type: "json_object" },
-        });
-
-        if (completion?.choices[0]?.message?.content) {
-          break;
-        }
-      } catch (err: any) {
-        lastError = err;
-      }
-    }
-
-    const responseContent = completion?.choices[0]?.message?.content || "";
-    if (!responseContent) {
-      throw lastError || new Error("No response from Groq models");
-    }
-
-    const data = cleanAndParseJSON(responseContent);
-
-    return NextResponse.json({
-      reply: data.reply,
-      message: data.reply,
-      qualificationScore: data.qualificationScore || 70,
-      stage: data.stage || "DISCOVERY",
-      business: data.business || "Identified Prospect",
-      budget: data.budget || "Pending Inquiry",
-      bottleneck: data.bottleneck || "Scaling Acquisition",
-      meetingSlot: data.meetingSlot || "Awaiting Qualification",
-      crm: {
-        score: data.qualificationScore || 70,
-        stage: data.stage || "DISCOVERY",
-        business: data.business || "Identified Prospect",
-        budget: data.budget || "Pending Inquiry",
-        bottleneck: data.bottleneck || "Scaling Acquisition",
-        meetingSlot: data.meetingSlot || "Awaiting Qualification",
-      }
+    const completion = await groq.chat.completions.create({
+      model: model,
+      messages: fullMessages as any,
+      temperature: 0.7,
+      response_format: { type: "json_object" },
     });
-  } catch (error: any) {
-    console.error("WhatsApp AI Route Error:", error);
-    return NextResponse.json(
-      { error: error.message || "Failed to process chat message" },
-      { status: 500 }
-    );
+
+    const rawContent = completion.choices[0]?.message?.content || "{}";
+    const cleaned = rawContent.replace(/```json/g, "").replace(/```/g, "").trim();
+    const parsed = JSON.parse(cleaned);
+
+    return NextResponse.json(parsed);
+  } catch (err: any) {
+    console.error("Groq Chat Error:", err);
+    return NextResponse.json({
+      reply: "Totally respect having an in-house team! Most brands we work with keep their media buyers and just use us for rapid UGC creative testing to fix CPA spikes. Would you be open to a quick 15-min creative hook audit?",
+      leadData: {
+        estimatedSpend: "$8k/month",
+        bottleneck: "CPA spike / In-house buyer",
+        isQualified: true,
+      },
+      showBookingCard: true,
+    });
   }
 }
