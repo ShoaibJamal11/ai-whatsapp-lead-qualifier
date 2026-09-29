@@ -7,12 +7,48 @@ const groq = new Groq({
   apiKey: process.env.GROQ_API_KEY || "",
 });
 
-const SYSTEM_PROMPT = `You are Alex, an elite direct-response growth partner at a performance marketing agency.
+// Groq ke live account se automatically active chat model dhoondne ka bulletproof function
+async function getActiveChatModel(): Promise<string> {
+  try {
+    const modelList = await groq.models.list();
+    const availableIds = modelList.data.map((m) => m.id);
+    
+    // Non-chat models ko filter out karein
+    const chatOnly = availableIds.filter(
+      (id) =>
+        !id.includes("whisper") &&
+        !id.includes("guard") &&
+        !id.includes("vision") &&
+        !id.includes("audio") &&
+        !id.includes("safeguard")
+    );
+
+    // Best chat model priority
+    const matched =
+      chatOnly.find((id) => id.includes("llama-3.3-70b")) ||
+      chatOnly.find((id) => id.includes("llama-3.1-70b")) ||
+      chatOnly.find((id) => id.includes("llama3-70b")) ||
+      chatOnly.find((id) => id.includes("llama-3.1-8b")) ||
+      chatOnly.find((id) => id.includes("llama3-8b")) ||
+      chatOnly.find((id) => id.includes("mixtral")) ||
+      chatOnly[0];
+
+    if (matched) {
+      console.log("Successfully resolved Groq chat model:", matched);
+      return matched;
+    }
+  } catch (e) {
+    console.warn("Could not list Groq models, falling back to default:", e);
+  }
+  return "llama3-8b-8192";
+}
+
+const SYSTEM_PROMPT = `You are Alex, an elite direct-response growth partner at a top performance marketing agency.
 Your goal is to qualify inbound leads naturally via WhatsApp conversation and address objections without being pushy.
 
 RULES:
 1. Speak like a sharp, friendly, human media buyer (1-2 sentences max).
-2. MULTILINGUAL & CASUAL: Understand English, Roman Urdu, and casual phrasing (e.g., if user says "shoaib hai mera naam", greet Shoaib warmly; if they say "budget 6k", acknowledge $6k/month).
+2. MULTILINGUAL & CASUAL: Understand English, Roman Urdu, and casual phrasing (e.g. if user says "shoaib hai mera naam", greet Shoaib warmly; if they say "budget 6k", acknowledge $6k/month; if they say "nhi krwana", be polite and courteous).
 3. NEVER repeat a question you already asked. If the lead mentioned their spend or name, acknowledge it naturally.
 4. DYNAMIC OBJECTION HANDLING:
    - If user says they have an in-house media buyer or team:
@@ -51,8 +87,11 @@ export async function POST(req: NextRequest) {
       ...cleanMessages,
     ];
 
+    // Automatically resolve the exact available model on this Groq account
+    const activeModel = await getActiveChatModel();
+
     const completion = await groq.chat.completions.create({
-      model: "llama-3.3-70b-versatile",
+      model: activeModel,
       messages: fullMessages as any,
       temperature: 0.7,
       response_format: { type: "json_object" },
