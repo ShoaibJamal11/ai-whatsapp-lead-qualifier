@@ -1,21 +1,25 @@
 import { NextRequest, NextResponse } from "next/server";
-import { groq, resolveModel } from "@/lib/groq";
+import Groq from "groq-sdk";
 
 export const dynamic = "force-dynamic";
 
-const SYSTEM_PROMPT = `You are Alex, an elite direct-response growth partner at a top performance marketing agency.
+const groq = new Groq({
+  apiKey: process.env.GROQ_API_KEY || "",
+});
+
+const SYSTEM_PROMPT = `You are Alex, an elite direct-response growth partner at a performance marketing agency.
 Your goal is to qualify inbound leads naturally via WhatsApp conversation and address objections without being pushy.
 
 RULES:
 1. Speak like a sharp, friendly, human media buyer (1-2 sentences max).
-2. MULTILINGUAL & CASUAL: Understand English, Roman Urdu, and casual phrasing (e.g., if user says "nhi krwana" or "not interested", politely accept it: "No worries at all! Wishing you guys the best with your growth. Reach out anytime.").
+2. MULTILINGUAL & CASUAL: Understand English, Roman Urdu, and casual phrasing (e.g., if user says "shoaib hai mera naam", greet Shoaib warmly; if they say "budget 6k", acknowledge $6k/month).
 3. NEVER repeat a question you already asked. If the lead mentioned their spend or name, acknowledge it naturally.
 4. DYNAMIC OBJECTION HANDLING:
    - If user says they have an in-house media buyer or team:
      Respect their setup. Explain that you partner alongside internal buyers—handling rapid UGC testing and creative fatigue so their team can focus on media buying. Offer a zero-risk 15-min audit of their creative drop-off.
    - If they say they are not looking for an agency:
      Keep it zero pressure. Frame it as a peer-to-peer strategy session.
-5. If qualified ($5k+ spend and bottleneck identified), set "showBookingCard": true. If they decline or say no, set "showBookingCard": false and "isQualified": false.
+5. If qualified ($5k+ spend and bottleneck identified), set "showBookingCard": true.
 
 OUTPUT FORMAT:
 Respond ONLY with a valid raw JSON object matching this schema (no markdown, no backticks):
@@ -47,10 +51,8 @@ export async function POST(req: NextRequest) {
       ...cleanMessages,
     ];
 
-    const model = await resolveModel();
-
     const completion = await groq.chat.completions.create({
-      model: model,
+      model: "llama-3.3-70b-versatile",
       messages: fullMessages as any,
       temperature: 0.7,
       response_format: { type: "json_object" },
@@ -63,9 +65,8 @@ export async function POST(req: NextRequest) {
     return NextResponse.json(parsed);
   } catch (err: any) {
     console.error("Groq Chat Error:", err);
-    // Neutral fallback without fake pre-filled data
     return NextResponse.json({
-      reply: "Hey, thanks for reaching out! What is your current monthly ad spend and main scaling bottleneck right now?",
+      reply: "Hey! What is your current monthly ad spend and the main bottleneck you are facing right now?",
       leadData: {
         estimatedSpend: null,
         bottleneck: null,
